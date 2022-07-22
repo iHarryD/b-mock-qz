@@ -6,6 +6,8 @@ const cors = require("cors");
 const authRoutes = require("./api/authRoute");
 const quizRoute = require("./api/QuizRoute");
 const questionRoute = require("./api/QuestionRoute");
+const getRandomNumber = require("./helpers/getRandomNumber");
+const questions = require("./models/QuestionModel");
 require("dotenv").config();
 const io = require("socket.io")(server, {
   cors: {
@@ -23,23 +25,80 @@ mongoose.connect(
   () => console.log("MongoDB connection established.")
 );
 
+function handleCustomRoom(socket) {
+  socket.on("create-room", (quizDetails, callbackFunction) => {
+    const existingRooms = Array.from(io.sockets.adapter.rooms).filter(
+      (room) => !room[1].has(room[0])
+    );
+    const newRoomID = existingRooms.length
+      ? String(Number(existingRooms[existingRooms.length - 1][0]) + 1)
+      : "1";
+    removeUserFromAllRooms(socket);
+    socket.join(newRoomID);
+    handleQuiz(socket, newRoomID);
+    socket.on("ready", async (roomID, quizDetails) => {
+      if (io.sockets.adapter.rooms.get(roomID).size === 2) {
+        io.in(roomID).emit("message", "Quiz will begin soon.");
+        const result = await questions.findOne({ quizCode: quizDetails.code });
+        io.in(roomID).emit("start", {
+          name: result.quizName,
+          code: result.quizCode,
+          questions: result.questions,
+        });
+      } else {
+        io.in(roomID).emit(
+          "error-message",
+          "Cannot start with one player only."
+        );
+      }
+    });
+    io.in(newRoomID).emit(
+      "message",
+      `${socket.data.nickname} created room ${newRoomID} for ${quizDetails.name} quiz`
+    );
+    if (callbackFunction) callbackFunction(newRoomID);
+  });
+  socket.on("join-room", (roomID, callbackFunction) => {
+    const searchedRoom = io.sockets.adapter.rooms.get(roomID);
+    if (!searchedRoom)
+      return io.emit("error-message", `Room ${roomID} does not exist.`);
+    if (searchedRoom.size >= 2)
+      return io.emit("error-message", `Room ${roomID} is full.`);
+    removeUserFromAllRooms(socket);
+    socket.join(String(roomID));
+    handleQuiz(socket, roomID);
+    io.in(roomID).emit(
+      "message",
+      `${socket.data.nickname} joined room ${roomID}`
+    );
+    if (callbackFunction) callbackFunction(roomID);
+  });
+}
+
+function removeUserFromAllRooms(socket) {
+  const existingRooms = Array.from(io.sockets.adapter.rooms).filter(
+    (room) => !room[1].has(room[0])
+  );
+  existingRooms.forEach((room) => socket.leave(room[0]));
+}
+
+function handleQuiz(socket, roomID) {
+  socket.on("next-question", (opponentScoreFromCurrentQuestion) => {
+    console.log(opponentScoreFromCurrentQuestion);
+    socket.to(roomID).emit("next-question", opponentScoreFromCurrentQuestion);
+  });
+  socket.on("end-quiz", () => {
+    io.sockets.adapter.rooms[roomID][1].forEach((socketConnection) => {
+      socketConnection.leave(roomID);
+    });
+  });
+}
+
 io.on("connection", (socket) => {
   console.log(`${socket.id} connected`);
   socket.on("disconnect", (socket) => console.log(`${socket.id} disconnected`));
-  socket.on("createRoom", (roomID) => {
-    socket.join(String(roomID));
-    io.emit("messageToAll", `Room ${roomID} created by ${socket.id}`);
-  });
-  socket.on("joinRoom", (roomID) => {
-    socket.join(String(roomID));
-    io.emit("messageToAll", `${socket.id} joined room ${roomID}`);
-  });
-  socket.on("messageToAll", (message) => {
-    io.emit("messageToAll", `${socket.id}: ${message}`);
-  });
-  socket.on("messageToRoom", (roomID, message) => {
-    io.in(roomID).emit("messageToRoom", `${socket.id}: ${message}`);
-  });
+  socket.on("add-nickname", (nickname) => (socket.data.nickname = nickname));
+  handleCustomRoom(socket);
 });
 
 app.use(express.json());
