@@ -27,6 +27,7 @@ mongoose.connect(
 
 function handleCustomRoom(socket) {
   socket.on("create-room", (quizDetails, callbackFunction) => {
+    removeUserFromAllRooms(socket);
     const existingRooms = Array.from(io.sockets.adapter.rooms).filter(
       (room) => !room[1].has(room[0])
     );
@@ -37,19 +38,25 @@ function handleCustomRoom(socket) {
     socket.join(newRoomID);
     handleQuiz(socket, newRoomID);
     socket.on("ready", async (roomID, quizDetails) => {
-      if (io.sockets.adapter.rooms.get(roomID).size === 2) {
-        io.in(roomID).emit("message", "Quiz will begin soon.");
-        const result = await questions.findOne({ quizCode: quizDetails.code });
-        io.in(roomID).emit("start", {
-          name: result.quizName,
-          code: result.quizCode,
-          questions: result.questions,
-        });
-      } else {
-        io.in(roomID).emit(
-          "error-message",
-          "Cannot start with one player only."
-        );
+      try {
+        if (io.sockets.adapter.rooms.get(roomID).size === 2) {
+          io.in(roomID).emit("message", "Quiz will begin soon.");
+          const result = await questions.findOne({
+            quizCode: quizDetails.code,
+          });
+          io.in(roomID).emit("start", {
+            name: result.quizName,
+            code: result.quizCode,
+            questions: result.questions,
+          });
+        } else {
+          io.in(roomID).emit(
+            "error-message",
+            "Cannot start with one player only."
+          );
+        }
+      } catch (err) {
+        return io.in(roomID).emit("error-message", err);
       }
     });
     io.in(newRoomID).emit(
@@ -84,13 +91,10 @@ function removeUserFromAllRooms(socket) {
 
 function handleQuiz(socket, roomID) {
   socket.on("next-question", (opponentScoreFromCurrentQuestion) => {
-    console.log(opponentScoreFromCurrentQuestion);
     socket.to(roomID).emit("next-question", opponentScoreFromCurrentQuestion);
   });
   socket.on("end-quiz", () => {
-    io.sockets.adapter.rooms[roomID][1].forEach((socketConnection) => {
-      socketConnection.leave(roomID);
-    });
+    io.in(roomID).emit("end-quiz");
   });
 }
 

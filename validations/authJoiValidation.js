@@ -2,7 +2,6 @@ const Joi = require("@hapi/joi");
 
 function signupJoiValidation(data) {
   const signupJoiSchema = Joi.object({
-    fullName: Joi.string().optional(),
     email: Joi.string().required(),
     password: Joi.string().min(6).required(),
   });
